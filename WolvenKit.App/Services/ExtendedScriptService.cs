@@ -21,20 +21,17 @@ public partial class ExtendedScriptService : ScriptService
     private readonly Dictionary<string, List<ScriptEntry>> _uiScripts = new();
     private readonly Dictionary<string, IScriptableControl> _uiControls = new();
 
-    private readonly Dictionary<string, object> _hostObjects = new();
-
     private readonly WKitUIScripting _wkit;
+    private readonly WScriptUIHelper _ui;
 
     private V8ScriptEngine? _uiEngine;
 
     public ExtendedScriptService(ILoggerService loggerService, WKitUIScripting wkit) : base(loggerService)
     {
         _wkit = wkit;
+        _ui = new WScriptUIHelper(this);
 
         DeployShippedFiles();
-
-        _hostObjects.Add("ui", new WScriptUIHelper(this));
-
         RefreshUIScripts();
     }
 
@@ -108,7 +105,7 @@ public partial class ExtendedScriptService : ScriptService
         }
     }
 
-    public bool OnSaveHook(string ext, CR2WFile cr2wFile)
+    public bool OnSaveHook(string ext, ref CR2WFile cr2wFile)
     {
         if (string.IsNullOrEmpty(ext))
         {
@@ -126,13 +123,26 @@ public partial class ExtendedScriptService : ScriptService
             var dto = new RedFileDto(cr2wFile);
             var json = RedJsonSerializer.Serialize(dto);
 
-            return TestExecute(scriptFilePath, json);
+            if (TestExecute(scriptFilePath, ref json))
+            {
+                if (!RedJsonSerializer.TryDeserialize(json, out RedFileDto? newDto) || newDto?.Data == null)
+                {
+                    _loggerService.Error("Couldn't deserialize return value");
+                    return false;
+                }
+
+                cr2wFile = newDto.Data;
+
+                return true;
+            }
+
+            return false;
         }
 
         return true;
     }
 
-    private bool TestExecute(string file, string json)
+    private bool TestExecute(string file, ref string json)
     {
         var engine = base.GetScriptEngine(new Dictionary<string, object> { { "wkit", _wkit } }, ISettingsManager.GetWScriptDir());
         engine.Script.file = json;
@@ -143,6 +153,7 @@ public partial class ExtendedScriptService : ScriptService
         try
         {
             engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard }, code);
+            json = engine.Script.file;
         }
         catch (ScriptEngineException ex1)
         {
@@ -160,7 +171,7 @@ public partial class ExtendedScriptService : ScriptService
     {
         UnloadScripts();
 
-        _uiEngine = base.GetScriptEngine(_hostObjects);
+        _uiEngine = base.GetScriptEngine(new Dictionary<string, object> { { "ui", _ui }, { "wkit", _wkit } }, ISettingsManager.GetWScriptDir());
 
         foreach (var file in Directory.GetFiles(ISettingsManager.GetWScriptDir(), "*.wscript"))
         {
