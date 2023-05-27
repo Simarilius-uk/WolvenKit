@@ -8,6 +8,7 @@ using Microsoft.ClearScript;
 using Microsoft.ClearScript.JavaScript;
 using Microsoft.ClearScript.V8;
 using WolvenKit.App.Helpers;
+using WolvenKit.App.Interaction;
 using WolvenKit.Common.Conversion;
 using WolvenKit.Core.Interfaces;
 using WolvenKit.Modkit.Scripting;
@@ -35,22 +36,56 @@ public partial class ExtendedScriptService : ScriptService
         RefreshUIScripts();
     }
 
+    
     private void DeployShippedFiles()
     {
-        var dir = ISettingsManager.GetWScriptDir();
-
-        CheckFile("Logger");
-        CheckFile("onSave_mesh");
-        CheckFile("ui_example");
-
-        void CheckFile(string fileName)
+        
+        void CopyFilesRecursively(string sourcePath, string targetPath)
         {
-            if (!File.Exists($"{dir}/{fileName}.wscript"))
+            // Copy those only once per new installation
+            if (!File.Exists(sourcePath))
             {
-                File.Copy(@$"Resources\Scripts\{fileName}.wscript", $"{dir}/{fileName}.wscript");
+                return;
+            }
+            if (!File.Exists(targetPath))
+            {
+                Directory.CreateDirectory(targetPath);
+            }
+            
+            //Now Create all of the directories
+            foreach (var dirPath in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
+            {
+                Directory.CreateDirectory(dirPath.Replace(sourcePath, targetPath));
+            }
+
+            //Copy all the files & Replaces any files with the same name
+            foreach (var newPath in Directory.GetFiles(sourcePath, "*.*",SearchOption.AllDirectories))
+            {
+                File.Copy(newPath, newPath.Replace(sourcePath, targetPath), true);
+            }
+            // Don't copy again until next install
+            Directory.Delete(sourcePath, true);
+        }
+        
+        var scriptDir = ISettingsManager.GetWScriptDir();
+
+        var defaultFiles = Directory.GetFiles(@"Resources\Scripts");
+        // Overwrite the defaults inside the root directory only if they don't exist
+        // we don't want the user to lose any changes
+        foreach (var filePath in defaultFiles)
+        {
+            var fileName = Path.GetFileName(filePath);
+
+            if (!File.Exists($"{scriptDir}/{fileName}") 
+                && (fileName.EndsWith("example.wscript") || fileName.StartsWith("onSave")))
+            {
+                File.Copy(filePath, $"{scriptDir}/{fileName}");
             }
         }
+
+        CopyFilesRecursively(@"Resources\Scripts\Wolvenkit", $"{scriptDir}/Wolvenkit");
     }
+    
 
     public void RegisterControl(IScriptableControl scriptableControl)
     {
@@ -144,7 +179,7 @@ public partial class ExtendedScriptService : ScriptService
 
     private bool TestExecute(string file, ref string json)
     {
-        var engine = base.GetScriptEngine(new Dictionary<string, object> { { "wkit", _wkit } }, ISettingsManager.GetWScriptDir());
+        var engine = GetScriptEngine(new Dictionary<string, object> { { "wkit", _wkit } }, ISettingsManager.GetWScriptDir());
         engine.Script.file = json;
         engine.Script.success = false;
 
@@ -171,7 +206,7 @@ public partial class ExtendedScriptService : ScriptService
     {
         UnloadScripts();
 
-        _uiEngine = base.GetScriptEngine(new Dictionary<string, object> { { "ui", _ui }, { "wkit", _wkit } }, ISettingsManager.GetWScriptDir());
+        _uiEngine = GetScriptEngine(new Dictionary<string, object> { { "ui", _ui }, { "wkit", _wkit } }, ISettingsManager.GetWScriptDir());
 
         foreach (var file in Directory.GetFiles(ISettingsManager.GetWScriptDir(), "*.wscript"))
         {
@@ -204,6 +239,17 @@ public partial class ExtendedScriptService : ScriptService
                 scriptableControl.AddScriptedElements(lst);
             }
         }
+    }
+
+    protected override V8ScriptEngine GetScriptEngine(Dictionary<string, object>? hostObjects = null, string? searchPath = null)
+    {
+        var engine = base.GetScriptEngine(hostObjects, searchPath);
+
+        engine.AddHostType(typeof(WMessageBoxImage));
+        engine.AddHostType(typeof(WMessageBoxButtons));
+        engine.AddHostType(typeof(WMessageBoxResult));
+
+        return engine;
     }
 }
 
